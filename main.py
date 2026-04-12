@@ -1,180 +1,102 @@
-import logging
-import random
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sqlite3
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
+import os
+import time
 
 # ================= CONFIGURATION =================
-# Ton Token Telegram officiel
-TOKEN = "7791940219:AAGP3h1nJJGynF1rikZEXrkLDKzfzcwdc0I"
-# Remplace les X par ton vrai numéro de téléphone (ex: 243810000000)
-WHATSAPP_NUMBER = "https://wa.me/243XXXXXXXXX" 
+TOKEN = "8795049125:AAFP1WGFen_7m4wtu_CemPrza3EwgdgrGFg" # Ton Token BotFather
+ADMIN_ID = 8365482737 # Ton ID récupéré
+ADMIN_PASSWORD = "je00remie00" # Ton mot de passe secret
+
+bot = telebot.TeleBot(TOKEN)
 
 # ================= BASE DE DONNÉES =================
-conn = sqlite3.connect("bot.db", check_same_thread=False)
+conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 
+# Création de la table avec support affiliation 3 niveaux
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    balance INTEGER DEFAULT 10000,
-    referrals INTEGER DEFAULT 0
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS bets (
-    user_id TEXT,
-    amount INTEGER,
-    result TEXT
+    id INTEGER PRIMARY KEY,
+    points INTEGER DEFAULT 0,
+    referrer INTEGER,
+    level2 INTEGER,
+    level3 INTEGER,
+    vip_expire INTEGER DEFAULT 0,
+    vip_type TEXT DEFAULT 'none'
 )
 """)
 conn.commit()
 
-# ================= LOGGING =================
-logging.basicConfig(level=logging.INFO)
-
-# ================= INITIALISATION UTILISATEUR =================
-def init_user(user_id):
-    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    if not cursor.fetchone():
-        cursor.execute(
-            "INSERT INTO users (user_id, balance, referrals) VALUES (?, ?, ?)",
-            (user_id, 10000, 0),
-        )
-        conn.commit()
-
-# ================= COMMANDE /START =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    init_user(user_id)
-
-    # Gestion du parrainage
-    if context.args:
-        ref = context.args[0]
-        if ref != user_id:
-            init_user(ref)
-            cursor.execute("UPDATE users SET balance = balance + 2000 WHERE user_id=?", (ref,))
-            conn.commit()
-
-    keyboard = [
-        [InlineKeyboardButton("💰 Contacter Agent (Dépôts/Retraits)", url=WHATSAPP_NUMBER)],
-        [InlineKeyboardButton("🎓 Formation Académie", callback_data="formation")],
-    ]
-
-    await update.message.reply_text(
-        "⚽ *Bienvenue sur Expert Foot 243*\n\n"
-        "🎁 Cadeau de bienvenue : *10 000 points* virtuels offerts !\n\n"
-        "Utilise `/parier montant equipe` pour jouer.\n"
-        "Utilise `/direct` pour les scores en mode Éco.",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-# ================= COMMANDE /SOLDE =================
-async def solde(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    init_user(user_id)
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    balance = cursor.fetchone()[0]
-    await update.message.reply_text(f"💰 Ton solde : {balance} points virtuels.")
-
-# ================= COMMANDE /PARIER =================
-async def parier(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    init_user(user_id)
-
-    if len(context.args) < 1:
-        await update.message.reply_text("❌ Usage: `/parier montant` (ex: /parier 500)", parse_mode="Markdown")
+# ================= LOGIQUE D'INSCRIPTION =================
+def add_user(user_id, referrer=None):
+    cursor.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    if cursor.fetchone():
         return
 
-    try:
-        montant = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ Erreur : Le montant doit être un chiffre.")
-        return
+    l2, l3 = None, None
+    if referrer:
+        # Chercher le parrain du parrain pour le niveau 2 et 3
+        cursor.execute("SELECT referrer, level2 FROM users WHERE id=?", (referrer,))
+        data = cursor.fetchone()
+        if data:
+            l2 = data[0]
+            l3 = data[1]
 
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    balance = cursor.fetchone()[0]
-
-    if montant <= 0:
-        await update.message.reply_text("❌ Mise invalide.")
-        return
-    if montant > balance:
-        await update.message.reply_text(f"❌ Solde insuffisant (Max: {balance})")
-        return
-
-    result = random.choice(["win", "lose"])
-
-    if result == "win":
-        gain = montant * 2
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (montant, user_id))
-        msg = f"🎉 GAGNÉ ! Ton équipe a triomphé. Tu gagnes {gain} points."
-    else:
-        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (montant, user_id))
-        msg = f"😢 PERDU ! Ton équipe a échoué. Tu perds {montant} points."
-
-    cursor.execute("INSERT INTO bets VALUES (?, ?, ?)", (user_id, montant, result))
+    cursor.execute("INSERT INTO users (id, referrer, level2, level3) VALUES (?, ?, ?, ?)", 
+                   (user_id, referrer, l2, l3))
     conn.commit()
-    await update.message.reply_text(msg)
 
-# ================= COMMANDE /DIRECT (MODE ÉCO) =================
-async def direct(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
-⚽ *LIVE FOOT (MODE ÉCO - DATA SAVER)*
+    # Distribution des points
+    if referrer:
+        cursor.execute("UPDATE users SET points = points + 10 WHERE id=?", (referrer,))
+    if l2:
+        cursor.execute("UPDATE users SET points = points + 5 WHERE id=?", (l2,))
+    if l3:
+        cursor.execute("UPDATE users SET points = points + 2 WHERE id=?", (l3,))
+    conn.commit()
 
-🇨🇩 Léopards 1 - 0 Jamaique
-🇪🇸 Real Madrid 2 - 1 Barça
-🏴 Arsenal 0 - 0 Chelsea
+# ================= COMMANDES =================
+@bot.message_handler(commands=['start'])
+def start(message):
+    args = message.text.split()
+    referrer = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+    add_user(message.from_user.id, referrer)
+    
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("💰 Gagner des points", callback_data="earn"))
+    markup.add(InlineKeyboardButton("🏆 Top Affiliés", callback_data="top_aff"))
+    
+    bot.send_message(message.chat.id, "👋 Bienvenue sur Kivu Super App 243 !\nUtilise ton lien pour inviter des amis et gagner de l'argent.", reply_markup=markup)
 
-📡 *Infos :* Inscription bonus avec code **AFRO243**
-"""
-    await update.message.reply_text(text, parse_mode="Markdown")
+@bot.message_handler(commands=['retirer'])
+def retirer(message):
+    user_id = message.from_user.id
+    cursor.execute("SELECT points FROM users WHERE id=?", (user_id,))
+    res = cursor.fetchone()
+    points = res[0] if res else 0
+    
+    if points < 100:
+        return bot.send_message(message.chat.id, "❌ Minimum de retrait : 100 points.")
+    
+    bot.send_message(message.chat.id, f"✅ Demande de retrait envoyée !\nPoints : {points}")
+    bot.send_message(ADMIN_ID, f"🚩 ALERTE RETRAIT\nUtilisateur : {user_id}\nPoints : {points}")
 
-# ================= ACADÉMIE & FORMATION =================
-async def formation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("📊 C'est quoi une Cote ?", callback_data="cote")],
-        [InlineKeyboardButton("💸 Gestion du Budget", callback_data="budget")],
-        [InlineKeyboardButton("🔥 Inscription Bonus", callback_data="bet")],
-    ]
-    await update.message.reply_text(
-        "🎓 *Académie des Gagnants Expert Foot 243*\n\nChoisis une leçon :",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+# ================= CALLBACKS =================
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    if call.data == "earn":
+        link = f"https://t.me/{bot.get_me().username}?start={call.from_user.id}"
+        bot.send_message(call.message.chat.id, f"🔗 Ton lien de parrainage :\n{link}\n\nPartage-le pour gagner des points !")
+    
+    elif call.data == "top_aff":
+        cursor.execute("SELECT id, points FROM users ORDER BY points DESC LIMIT 10")
+        data = cursor.fetchall()
+        txt = "🏆 TOP AFFILIÉS :\n\n"
+        for u in data:
+            txt += f"👤 {u[0]} → {u[1]} pts\n"
+        bot.send_message(call.message.chat.id, txt)
 
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "cote":
-        text = "📊 *La Cote :* C'est le multiplicateur de ton gain. Si tu mises 1000 sur une cote de 2.00, tu gagnes 2000."
-    elif query.data == "budget":
-        text = "💸 *Budget :* Ne mise jamais plus de 10% de ton capital sur un seul match pour durer dans le jeu."
-    elif query.data == "bet":
-        text = "🔥 *Inscription :* Crée ton compte sur AfroPari avec le code promo **AFRO243** pour recevoir +300% de bonus."
-
-    await query.edit_message_text(text, parse_mode="Markdown")
-
-# ================= LANCEMENT =================
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("solde", solde))
-    app.add_handler(CommandHandler("parier", parier))
-    app.add_handler(CommandHandler("direct", direct))
-    app.add_handler(CommandHandler("formation", formation))
-    app.add_handler(CallbackQueryHandler(callback))
-
-    print("🚀 Bot Expert Foot 243 en ligne...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+print("🤖 Bot en marche...")
+bot.infinity_polling()
