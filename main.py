@@ -99,4 +99,25 @@ def callback_query(call):
         bot.send_message(call.message.chat.id, txt)
 
 print("🤖 Bot en marche...")
-bot.infinity_polling()
+bot.infinity_polling()# ================= ADMIN (CORRIGÉ) =================
+@bot.message_handler(commands=['admin'])
+def admin(message):
+    # On vérifie d'abord si c'est bien TOI (le patron)
+    if message.from_user.id != ADMIN_ID:
+        return bot.send_message(message.chat.id, "⛔ Accès refusé. Vous n'êtes pas l'administrateur.")
+
+    msg = bot.send_message(message.chat.id, "🔑 Veuillez entrer le mot de passe secret :")
+    bot.register_next_step_handler(msg, process_password)
+
+def process_password(message):
+    # On compare le texte envoyé avec ton mot de passe configuré
+    if message.text == ADMIN_PASSWORD:
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton("👥 Utilisateurs", callback_data="users_count"),
+            InlineKeyboardButton("📢 Message Groupé", callback_data="broadcast_msg")
+        )
+        bot.send_message(message.chat.id, "✅ Bienvenue Patron ! Que voulez-vous faire ?", reply_markup=markup)
+    else:
+        bot.send_message(message.chat.id, "❌ Mot de passe incorrect. Réessayez avec /admin")
+
